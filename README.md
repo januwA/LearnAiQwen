@@ -27,5 +27,5 @@ A3B = 激活参数 30亿（A = Activated，运行时实际加载到显存的参�
 下载模型
 
 ```shell
-uv run hf download Qwen/Qwen2.5-Coder-1.5B-Instruct --local-dir ./qwen2.5-1.5b
+uv run hf download Qwen/Qwen2.5-Coder-3B-Instruct --local-dir ./qwen2.5-3b
 ```
