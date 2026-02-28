@@ -92,12 +92,19 @@ class FileAnalysisTool(ITool):
             }
         }
     def execute(self, action: str, path: str, **kwargs) -> str:
-        if os.path.isdir(path):
+        root = os.path.abspath(".")
+        abs_path = os.path.abspath(path)
+        if os.path.commonpath([root, abs_path]) != root:
+            return "❌ 仅允许读取当前项目目录内文件。"
+        if os.path.isdir(abs_path):
             return f"❌ '{path}' 是目录。请提供具体文件名。"
         try:
-            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            stat = os.stat(abs_path)
+            with open(abs_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
-            return f"--- 文件内容 ({path}) ---\n{content[:3000]}"
+            if action == "get_info":
+                return f"文件: {abs_path}\n大小: {stat.st_size} bytes\n行数: {len(content.splitlines())}"
+            return f"--- 文件内容 ({abs_path}) ---\n{content[:3000]}"
         except Exception as e:
             return f"失败: {str(e)}"
 

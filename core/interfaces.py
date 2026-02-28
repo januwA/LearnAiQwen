@@ -32,3 +32,13 @@ class IVectorStore(ABC):
     def query(self, text: str, top_k: int = 3) -> List[str]:
         """检索相关片段"""
         pass
+
+    @abstractmethod
+    def save(self, directory: str) -> None:
+        """保存索引数据"""
+        pass
+
+    @abstractmethod
+    def load(self, directory: str) -> bool:
+        """加载索引数据，成功返回 True"""
+        pass

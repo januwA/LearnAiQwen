@@ -14,6 +14,7 @@ class RagEngine:
         自动扫描并索引项目中的代码文件
         """
         docs = []
+        chunk_size = 1200
         # 只索引具有代表意义的文件
         for root, _, files in os.walk(directory):
             if ".git" in root or ".venv" in root: continue
@@ -23,10 +24,13 @@ class RagEngine:
                     try:
                         with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                             content = f.read()
-                            # 简单分块：按行或按函数分（演示用简单截断）
-                            docs.append(f"文件: {file}\n路径: {path}\n内容摘要: {content[:500]}")
-                    except:
-                        pass
+                            for idx, start in enumerate(range(0, len(content), chunk_size)):
+                                chunk = content[start:start + chunk_size]
+                                docs.append(
+                                    f"文件: {file}\n路径: {path}\n分块: {idx + 1}\n内容:\n{chunk}"
+                                )
+                    except OSError as exc:
+                        print(f"⚠️ 跳过文件失败: {path} ({exc})")
         self.vector_store.add_documents(docs)
 
     def get_related_context(self, query: str) -> str:
