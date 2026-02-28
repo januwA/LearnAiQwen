@@ -32,30 +32,29 @@ class ChatApp:
         self.console = Console()
         
         self.default_prompt = (
-            "你是一个受控 Agent。你的思维必须保持在核心逻辑内。\n"
-            "【行为铁律】：\n"
-            "**工具驱动**：只要计划中还有 pending 的任务，你必须输出 JSON 工具调用。禁止单纯的文字描述。\n"
-            "**先规划后行动**：必须先 set。每步结束必须 update 并把 status 改为 done。\n"
-            "**执行python代码**：你什么都可以做,当你做不到可以编写python代码,外部执行后会把结果返回给你. \n"
+            "你是一个本地 Agent，具备工具调用能力。\n"
+            "工作原则：\n"
+            "1) 需要实时/外部信息时，优先调用工具，不要臆测。\n"
+            "2) 简单事实或推理问题可直接回答。\n"
+            "3) 当你无法直接获得信息时，不要说“做不到”，而是发起工具调用。\n"
+            "4) 如果需要执行代码，可返回 ```python 代码块，系统会执行并回传结果。"
         )
         self.history = [{"role": "system", "content": self.default_prompt}]
         self.history.extend(self.storage.get_all_messages())
 
     def _decide_strategy(self, prompt: str) -> Dict[str, bool]:
         decide_prompt = (
-            "你是路由器。请判断是否需要 RAG 和工具调用。\n"
-            "请按“必要性”判断，而不是机械套规则。\n"
-            "倾向：分析本地目录/项目/文件时，通常 use_tools=true，use_rag 可按相关性决定。\n"
-            "倾向：纯数学、常识问答通常 use_tools=false。\n"
-            "当你判断自己无法直接获得信息（例如当前时间、目录内容、文件内容、联网信息）时，应该 use_tools=true。\n"
-            "只返回 JSON，格式如下：\n"
+            "你是路由器。判断当前请求是否需要检索与工具。\n"
+            "你知道系统可调用工具（目录、文件、时间、联网、计划、python执行）。\n"
+            "规则：若回答依赖实时/本地文件/联网信息，use_tools 应为 true。\n"
+            "仅返回 JSON（不要 markdown），格式：\n"
             '{"use_rag": boolean, "use_tools": boolean}\n'
             f"用户输入: {prompt}"
         )
         raw = self.llm_service.generate_response([{"role": "user", "content": decide_prompt}]).strip()
         m = re.search(r"\{[\s\S]*\}", raw)
         if not m:
-            return {"use_rag": False, "use_tools": False}
+            return {"use_rag": False, "use_tools": True}
         try:
             obj = json.loads(m.group(0))
             return {
@@ -63,7 +62,7 @@ class ChatApp:
                 "use_tools": bool(obj.get("use_tools", False)),
             }
         except json.JSONDecodeError:
-            return {"use_rag": False, "use_tools": False}
+            return {"use_rag": False, "use_tools": True}
 
     def _looks_local_access_refusal(self, text: str) -> bool:
         patterns = [
@@ -162,6 +161,15 @@ class ChatApp:
         final_prompt = prompt
         if strategy["use_rag"] and rag_context:
             final_prompt = f"【可选参考上下文】\n{rag_context}\n\n用户问题: {prompt}"
+        if strategy["use_tools"]:
+            final_prompt = (
+                f"{final_prompt}\n\n"
+                "【系统提示】你拥有可调用工具。若回答需要实时/本地信息，请直接调用工具，不要猜测。\n"
+                "工具选择参考：\n"
+                "- 项目结构：优先 list_current_dir，再用 file_analysis 读取关键文件（如 README.md / pyproject.toml）。\n"
+                "- Git 状态：优先调用 git_status。\n"
+                "- 时间日期：优先调用 get_current_datetime。"
+            )
         
         self.history.append({"role": "user", "content": final_prompt})
         self.storage.save_message("user", final_prompt)

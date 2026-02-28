@@ -24,12 +24,12 @@ class ILLMService(ABC):
 
 class IVectorStore(ABC):
     @abstractmethod
-    def add_documents(self, documents: List[str]):
+    def add_documents(self, documents: List[Dict[str, Any] | str]):
         """索引文档"""
         pass
 
     @abstractmethod
-    def query(self, text: str, top_k: int = 3) -> List[str]:
+    def query(self, text: str, top_k: int = 3) -> List[Dict[str, Any]]:
         """检索相关片段"""
         pass
 

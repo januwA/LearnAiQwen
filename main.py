@@ -105,11 +105,12 @@ def main():
     )
 
     # 注册扩展后的全能工具集
-    from infrastructure.tools import WebSearchTool, DateTimeTool, ListCurrentDirTool, FileAnalysisTool, PlanTool
+    from infrastructure.tools import WebSearchTool, DateTimeTool, ListCurrentDirTool, FileAnalysisTool, PlanTool, GitStatusTool
     app.register_tool(WebSearchTool()) # 增加联网搜索
     app.register_tool(DateTimeTool())
     app.register_tool(ListCurrentDirTool())
     app.register_tool(FileAnalysisTool())
+    app.register_tool(GitStatusTool())
     app.register_tool(PlanTool(storage))
 
     if args.task:

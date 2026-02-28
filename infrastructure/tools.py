@@ -1,5 +1,6 @@
 import os
 import json
+import subprocess
 from typing import Dict, Any, List
 from core.interfaces import ITool
 from infrastructure.storage_service import StorageService
@@ -97,6 +98,11 @@ class FileAnalysisTool(ITool):
         if os.path.commonpath([root, abs_path]) != root:
             return "❌ 仅允许读取当前项目目录内文件。"
         if os.path.isdir(abs_path):
+            if action == "get_info":
+                items = os.listdir(abs_path)
+                files = sum(1 for x in items if os.path.isfile(os.path.join(abs_path, x)))
+                dirs = sum(1 for x in items if os.path.isdir(os.path.join(abs_path, x)))
+                return f"目录: {abs_path}\n子目录数: {dirs}\n文件数: {files}\n总条目: {len(items)}"
             return f"❌ '{path}' 是目录。请提供具体文件名。"
         try:
             stat = os.stat(abs_path)
@@ -107,6 +113,36 @@ class FileAnalysisTool(ITool):
             return f"--- 文件内容 ({abs_path}) ---\n{content[:3000]}"
         except Exception as e:
             return f"失败: {str(e)}"
+
+class GitStatusTool(ITool):
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "git_status",
+                "description": "获取当前仓库分支和工作区变更状态（git status）。",
+                "parameters": {"type": "object", "properties": {}, "required": []}
+            }
+        }
+
+    def execute(self, **kwargs) -> str:
+        try:
+            cp = subprocess.run(
+                ["git", "status", "--short", "--branch"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+            )
+            if cp.returncode != 0:
+                err = cp.stderr.strip() or "git status 执行失败"
+                return f"❌ {err}"
+            output = cp.stdout.strip()
+            return output if output else "工作区干净，无变更。"
+        except Exception as e:
+            return f"❌ git 状态获取失败: {e}"
 
 class PlanTool(ITool):
     def __init__(self, storage: StorageService):
