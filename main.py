@@ -105,17 +105,20 @@ def main():
     )
 
     from infrastructure.tools import (
-        WebSearchTool, 
-        DateTimeTool, 
-        ListCurrentDirTool, 
-        FileAnalysisTool, 
-        PlanTool, 
+        WebSearchTool,
+        DateTimeTool,
+        ListCurrentDirTool,
+        FileAnalysisTool,
+        PlanTool,
         GitStatusTool,
         FileEditTool,
         SystemContextTool,
         PythonReplTool,
         ImageAnalysisTool,
-        RagSearchTool
+        RagSearchTool,
+        ShellCommandTool,
+        FileSearchTool,
+        CodeSearchTool,
     )
     app.register_tool(WebSearchTool()) # 增加联网搜索
     app.register_tool(DateTimeTool())
@@ -128,6 +131,9 @@ def main():
     app.register_tool(PythonReplTool())
     app.register_tool(ImageAnalysisTool())
     app.register_tool(RagSearchTool(rag_engine))
+    app.register_tool(ShellCommandTool()) # 新增：通用 Shell 命令工具
+    app.register_tool(FileSearchTool())   # 新增：文件搜索工具
+    app.register_tool(CodeSearchTool())   # 新增：代码内容搜索工具
 
     if args.task:
         app.run(args.task)

@@ -44,6 +44,9 @@ class ChatApp:
         self.history = [{"role": "system", "content": self.default_prompt}]
         self.history.extend(self.storage.get_all_messages())
 
+        # Few-shot 示例：帮助小模型理解工具调用格式
+        self._add_few_shot_examples()
+
     def _get_usage_bar(self, turn_tokens: int = 0) -> str:
         """生成 Token 状态栏文本"""
         import psutil
@@ -364,3 +367,27 @@ class ChatApp:
         self.storage.clear_all()
         self.history = [self.history[0]]
         self.console.print("[bold green]🧹 对话历史与数据库记忆已重置。[/]")
+
+    def _add_few_shot_examples(self):
+        """添加 Few-shot 示例，帮助小模型理解工具调用格式。"""
+        examples = [
+            {"role": "user", "content": "现在几点了？"},
+            {"role": "assistant", "content": ""},
+            {"role": "tool", "name": "get_current_datetime", "content": "2026-03-02 14:30:00"},
+            {"role": "assistant", "content": "当前时间是 2026 年 3 月 2 日 14:30:00。"},
+            {"role": "user", "content": "帮我找一下项目里所有的 Python 文件"},
+            {"role": "assistant", "content": ""},
+            {"role": "tool", "name": "file_search", "arguments": {"pattern": "*.py"}, "content": "main.py\nutils.py"},
+            {"role": "assistant", "content": "找到 Python 文件：main.py, utils.py"},
+            {"role": "user", "content": "安装 requests 库"},
+            {"role": "assistant", "content": ""},
+            {"role": "tool", "name": "shell_command", "arguments": {"command": "pip install requests"}, "content": "Successfully installed requests"},
+            {"role": "assistant", "content": "requests 库已安装。"},
+            {"role": "user", "content": "读取变更文件内容，总结下功能变更"},
+            {"role": "assistant", "content": ""},
+            {"role": "tool", "name": "shell_command", "arguments": {"command": "git diff --stat"}, "content": " infrastructure/tools.py | 222 +\n main.py | 18 +-"},
+            {"role": "assistant", "content": ""},
+            {"role": "tool", "name": "shell_command", "arguments": {"command": "git diff infrastructure/tools.py"}, "content": "[文件内容...]"},
+            {"role": "assistant", "content": "本次变更总结了 3 个新工具..."},
+        ]
+        self.history.extend(examples)

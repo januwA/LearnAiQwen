@@ -391,3 +391,225 @@ class PlanTool(ITool):
             self._render_table("当前待办清单")
             return "已在屏幕显示当前计划清单。"
         return "完成"
+
+
+class ShellCommandTool(ITool):
+    """
+    执行 Shell 命令的通用工具。
+    适用于 git/npm/pip/docker 等命令行操作。
+    """
+
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "shell_command",
+                "description": "执行 Shell 命令并获取输出。适用于 git/npm/pip/docker 等命令行操作。危险操作（如 rm -rf）会被拒绝。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "要执行的完整命令"},
+                        "cwd": {"type": "string", "description": "工作目录（可选，默认为当前目录）"}
+                    },
+                    "required": ["command"]
+                }
+            }
+        }
+
+    def _is_dangerous(self, command: str) -> bool:
+        """检测危险命令"""
+        dangerous_patterns = [
+            "rm -rf /", "rm -rf /*", "mkfs", "dd if=",
+            ":(){:|:&};:", "chmod -R 777 /", "chown -R"
+        ]
+        cmd_lower = command.lower()
+        return any(pattern in cmd_lower for pattern in dangerous_patterns)
+
+    def execute(self, command: str, cwd: str = None) -> str:
+        # 安全检查
+        if self._is_dangerous(command):
+            return "❌ 拒绝执行危险命令，该操作可能对系统造成破坏。"
+
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=cwd or os.getcwd(),
+                timeout=120,
+                encoding="utf-8",
+                errors="replace"
+            )
+
+            output_parts = []
+            if result.returncode != 0:
+                output_parts.append(f"退出码：{result.returncode}")
+            if result.stdout:
+                output_parts.append(f"STDOUT:\n{result.stdout.strip()}")
+            if result.stderr:
+                output_parts.append(f"STDERR:\n{result.stderr.strip()}")
+
+            if not output_parts:
+                return "命令执行成功，无输出。"
+
+            return "\n".join(output_parts)
+
+        except subprocess.TimeoutExpired:
+            return "❌ 命令执行超时（120 秒），请尝试优化命令或分段执行。"
+        except Exception as e:
+            return f"❌ 命令执行失败：{str(e)}"
+
+
+class FileSearchTool(ITool):
+    """
+    模糊查找文件的工具，支持 glob 模式匹配。
+    """
+
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "file_search",
+                "description": "根据文件名或模式搜索文件。支持 glob 通配符（如 *.py、**/test/*.js）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "搜索模式，如 '*.py' 或 '**/*.txt'"},
+                        "path": {"type": "string", "description": "搜索起始目录（可选，默认为当前目录）"},
+                        "max_results": {"type": "integer", "description": "最大返回结果数（可选，默认 50）"}
+                    },
+                    "required": ["pattern"]
+                }
+            }
+        }
+
+    def execute(self, pattern: str, path: str = ".", max_results: int = 50) -> str:
+        import fnmatch
+
+        search_path = os.path.abspath(path) if path else os.getcwd()
+        if not os.path.isdir(search_path):
+            return f"❌ 目录不存在：{path}"
+
+        # 处理 glob 模式
+        is_recursive = "**" in pattern
+        simple_pattern = pattern.replace("**/", "").replace("**", "")
+
+        results = []
+        try:
+            if is_recursive:
+                for root, dirs, files in os.walk(search_path):
+                    # 跳过隐藏目录和常见忽略目录
+                    dirs[:] = [d for d in dirs if not d.startswith('.')]
+                    for file in files:
+                        if fnmatch.fnmatch(file, simple_pattern) or simple_pattern in file:
+                            rel_path = os.path.relpath(os.path.join(root, file), search_path)
+                            results.append(rel_path)
+                            if len(results) >= max_results:
+                                break
+                    if len(results) >= max_results:
+                        break
+            else:
+                for file in os.listdir(search_path):
+                    if fnmatch.fnmatch(file, pattern) or pattern in file:
+                        results.append(file)
+                        if len(results) >= max_results:
+                            break
+
+            if not results:
+                return f"未找到匹配模式 '{pattern}' 的文件。"
+
+            formatted = "\n".join(f"  {r}" for r in results)
+            suffix = f"\n... 共 {len(results)}+ 个结果" if len(results) >= max_results else ""
+            return f"🔍 搜索结果 (模式：{pattern}):{suffix}\n{formatted}"
+
+        except Exception as e:
+            return f"❌ 搜索失败：{str(e)}"
+
+
+class CodeSearchTool(ITool):
+    """
+    代码内容搜索工具，使用 grep 或 ripgrep 搜索代码。
+    """
+
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "code_search",
+                "description": "在代码文件中搜索包含特定关键词或正则表达式的行。优先使用 ripgrep (rg)，如果没有则使用 grep。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "搜索关键词或正则表达式"},
+                        "file_type": {"type": "string", "description": "文件类型过滤（可选），如 'py'、'js'、'ts'"},
+                        "path": {"type": "string", "description": "搜索目录（可选，默认为当前目录）"},
+                        "max_results": {"type": "integer", "description": "最大返回结果数（可选，默认 30）"}
+                    },
+                    "required": ["pattern"]
+                }
+            }
+        }
+
+    def execute(self, pattern: str, file_type: str = None, path: str = ".", max_results: int = 30) -> str:
+        search_path = os.path.abspath(path) if path else os.getcwd()
+        if not os.path.isdir(search_path):
+            return f"❌ 目录不存在：{path}"
+
+        # 构建 grep 命令
+        use_ripgrep = self._has_ripgrep()
+
+        if use_ripgrep:
+            cmd = ["rg", "--line-number", "--color", "never", pattern]
+            if file_type:
+                cmd.extend(["--type", file_type])
+            cmd.extend(["--max-count", str(max_results)])
+            cmd.append(search_path)
+        else:
+            cmd = ["grep", "-rn", "--color=never", pattern]
+            if file_type:
+                cmd.extend(["--include", f"*.{file_type}"])
+            cmd.extend(["-m", str(max_results)])
+            cmd.append(search_path)
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                encoding="utf-8",
+                errors="replace"
+            )
+
+            if result.returncode == 0 and result.stdout:
+                lines = result.stdout.strip().split("\n")
+                if len(lines) >= max_results:
+                    return f"🔍 代码搜索结果 (关键词：{pattern}):\n{result.stdout.strip()}\n... (共 {max_results}+ 个结果，已截断)"
+                return f"🔍 代码搜索结果 (关键词：{pattern}):\n{result.stdout.strip()}"
+            elif result.returncode == 1:
+                return f"未找到匹配 '{pattern}' 的代码。"
+            else:
+                error = result.stderr.strip() or "未知错误"
+                return f"❌ 搜索失败：{error}"
+
+        except subprocess.TimeoutExpired:
+            return "❌ 搜索超时（30 秒），请尝试更精确的关键词。"
+        except Exception as e:
+            return f"❌ 搜索执行失败：{str(e)}"
+
+    def _has_ripgrep(self) -> bool:
+        """检测系统是否安装了 ripgrep"""
+        try:
+            result = subprocess.run(
+                ["rg", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
