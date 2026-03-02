@@ -1,9 +1,12 @@
+[project.scripts]
+ai-qwen = "main:main"
+
 [project]
 name = "ai-qwen"
 version = "0.1.0"
-description = "Add your description here"
+description = "本地 AI Agent - 基于 Qwen2.5 模型的代码助手"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 dependencies = [
     "accelerate>=1.12.0",
     "huggingface-hub>=1.5.0",
@@ -20,6 +23,9 @@ dependencies = [
     "psutil>=7.2.2",
     "pillow>=12.0.0",
 ]
+
+[dependency-groups]
+dev = []
 
 [[tool.uv.index]]
 url = "https://download.pytorch.org/whl/cu130"

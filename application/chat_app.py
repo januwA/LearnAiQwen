@@ -21,13 +21,13 @@ class ChatApp:
         storage: StorageService,
         rag_engine: RagEngine = None,
         auto_approve: bool = False,
-        collect_feedback: bool = True,
+        quiet: bool = False,
     ):
         self.llm_service = llm_service
         self.storage = storage
         self.rag_engine = rag_engine
         self.auto_approve = auto_approve
-        self.collect_feedback = collect_feedback
+        self.quiet = quiet
         self.tools: Dict[str, ITool] = {}
         self.console = Console()
         self.total_tokens = 0 # 当前会话累计 Token
@@ -206,14 +206,14 @@ class ChatApp:
     def register_tool(self, tool: ITool):
         self.tools[tool.metadata["function"]["name"]] = tool
 
-    def run(self, prompt: str, stream: bool = True):
+    def run(self, prompt: str, stream: bool = True) -> str:
         # 1. 自动注入基础环境上下文（Gemini CLI 风格：感知当前状态）
-        with self.console.status("[bold blue][System] 正在同步环境状态...", spinner="earth"):
+        if self.quiet:
             try:
                 # 尝试获取 git 状态和当前目录摘要作为背景
                 cwd_summary = self.tools["list_current_dir"].execute() if "list_current_dir" in self.tools else "Unknown"
                 git_summary = self.tools["git_status"].execute() if "git_status" in self.tools else "Not a git repo"
-                
+
                 context_msg = (
                     f"【当前环境状态】\n"
                     f"工作目录摘要:\n{cwd_summary[:500]}...\n"
@@ -224,11 +224,29 @@ class ChatApp:
                 self.history.append({"role": "system", "content": context_msg})
             except:
                 pass
+        else:
+            with self.console.status("[bold blue][System] 正在同步环境状态...", spinner="earth"):
+                try:
+                    # 尝试获取 git 状态和当前目录摘要作为背景
+                    cwd_summary = self.tools["list_current_dir"].execute() if "list_current_dir" in self.tools else "Unknown"
+                    git_summary = self.tools["git_status"].execute() if "git_status" in self.tools else "Not a git repo"
+                    
+                    context_msg = (
+                        f"【当前环境状态】\n"
+                        f"工作目录摘要:\n{cwd_summary[:500]}...\n"
+                        f"Git 状态: {git_summary[:200]}\n"
+                        "如果你需要更详细的文件内容或进行深入分析，请调用相关工具（如 rag_search 或 file_analysis）。"
+                    )
+                    # 这种系统提示不存入持久化数据库，仅作为当前轮次的上下文
+                    self.history.append({"role": "system", "content": context_msg})
+                except:
+                    pass
 
         # 2. 窗口管理（保持最近上下文）
         if len(self.history) > 12:
             self.history = [self.history[0]] + self.history[-8:]
-            self.console.print("[dim][System] 上下文窗口已自动裁减...[/]")
+            if not self.quiet:
+                self.console.print("[dim][System] 上下文窗口已自动裁减...[/]")
 
         # 3. 记录用户输入
         self.history.append({"role": "user", "content": prompt})
@@ -236,28 +254,8 @@ class ChatApp:
         
         # 4. 执行核心推理（统一 ReAct 循环）
         # 模型现在根据 prompt 和环境上下文，自主决定是否调用 rag_search, file_analysis 等
-        used_tools, last_answer = self._process_iteration(stream, allow_tools=True)
-
-        # 5. 用户反馈闭环
-        if self.collect_feedback:
-            self._collect_feedback(prompt)
-
-    def _collect_feedback(self, query: str):
-        # 只有最后一条消息是助理回复时才收集
-        last_resp = self.history[-1]["content"] if self.history[-1]["role"] == "assistant" else "对话结束"
-        
-        choice = questionary.select(
-            "🌟 对于本次回答，您觉得：",
-            choices=[
-                {"name": "👍 非常有帮助 (Positive)", "value": 1},
-                {"name": "👎 没啥用 (Negative)", "value": -1},
-                {"name": "⏭️ 跳过", "value": 0}
-            ]
-        ).ask()
-        
-        if choice != 0:
-            self.storage.save_feedback(query, last_resp, choice)
-            self.console.print("[italic green]感谢您的反馈！样本已存入 SQLite 用于系统进化库。[/]")
+        _, last_answer = self._process_iteration(stream, allow_tools=True)
+        return last_answer
 
     def _process_iteration(self, stream: bool, allow_tools: bool, max_iterations: int = 8):
         executed_calls = set()
@@ -265,18 +263,20 @@ class ChatApp:
         used_tools = False
         last_answer = ""
         for i in range(max_iterations):
-            self.console.print(f"\n[bold cyan]Assistant (Step {i+1}): [/]")
+            if not self.quiet:
+                self.console.print(f"\n[bold cyan]Assistant (Step {i+1}): [/]")
             full_response = ""
             
             # 使用上下文管理防止显存碎片（可选）
-            if stream and i == 0:
+            if stream and i == 0 and not self.quiet:
                 with Live(vertical_overflow="visible", console=self.console) as live:
                     for chunk in self.llm_service.generate_stream(self.history, tools=tool_specs):
                         full_response += chunk
                         live.update(Markdown(full_response))
             else:
                 full_response = self.llm_service.generate_response(self.history, tools=tool_specs)
-                self.console.print(Markdown(full_response))
+                if not self.quiet:
+                    self.console.print(Markdown(full_response))
 
             if not full_response.strip(): break
             
@@ -285,7 +285,8 @@ class ChatApp:
             resp_tokens = self.llm_service.get_token_count(full_response)
             turn_tokens = prompt_tokens + resp_tokens
             self.total_tokens += turn_tokens
-            self.console.print(self._get_usage_bar(turn_tokens))
+            if not self.quiet:
+                self.console.print(self._get_usage_bar(turn_tokens))
 
             is_tool = ("<tool_call>" in full_response or "```json" in full_response)
             python_blocks = self._extract_python_blocks(full_response)
@@ -305,21 +306,24 @@ class ChatApp:
                 if status == "STOP": break
             elif python_blocks:
                 for idx, code in enumerate(python_blocks):
-                    self.console.print(
-                        Panel(
-                            f"[Python] 检测到代码块 #{idx+1}\n[dim]{code[:1200]}[/]",
-                            border_style="yellow",
+                    if not self.quiet:
+                        self.console.print(
+                            Panel(
+                                f"[Python] 检测到代码块 #{idx+1}\n[dim]{code[:1200]}[/]",
+                                border_style="yellow",
+                            )
                         )
-                    )
                     if self.auto_approve:
                         confirm = True
                     else:
                         confirm = questionary.confirm("是否执行上述 Python 代码?", default=False).ask()
                     if not confirm:
-                        self.console.print("[System] Python 执行已由用户拒绝。")
+                        if not self.quiet:
+                            self.console.print("[System] Python 执行已由用户拒绝。")
                         continue
                     result = self._execute_python(code)
-                    self.console.print(f"[System] 执行结果: [italic cyan]{result[:800]}...[/]")
+                    if not self.quiet:
+                        self.console.print(f"[System] 执行结果: [italic cyan]{result[:800]}...[/]")
                     self.history.append({"role": "tool", "name": "python_exec", "content": result})
                     self.storage.save_message("tool", f"[python_exec] {result}")
                     used_tools = True
@@ -343,7 +347,8 @@ class ChatApp:
                 name, args = call["name"], call.get("arguments", {})
                 is_plan = (name == "manage_plan" and args.get("action") == "set")
                 
-                self.console.print(Panel(f"[Call] {name}\n[Args] {json.dumps(args, ensure_ascii=False)}", border_style="yellow"))
+                if not self.quiet:
+                    self.console.print(Panel(f"[Call] {name}\n[Args] {json.dumps(args, ensure_ascii=False)}", border_style="yellow"))
                 
                 if self.auto_approve:
                     confirm = True
@@ -353,14 +358,17 @@ class ChatApp:
                 
                 if confirm:
                     res = self.tools[name].execute(**args) if name in self.tools else "找不到该工具模块"
-                    self.console.print(f"[System] 执行成功，返回内容已注入上下文。")
+                    if not self.quiet:
+                        self.console.print(f"[System] 执行成功，返回内容已注入上下文。")
                     self.history.append({"role": "tool", "name": name, "content": str(res)})
                     self.storage.save_message("tool", f"[{name}] {res}")
                 else:
-                    self.console.print("[System] 任务已由用户手动终止。")
+                    if not self.quiet:
+                        self.console.print("[System] 任务已由用户手动终止。")
                     return "STOP"
             except Exception as e:
-                self.console.print(f"[System] 工具调用解析异常: {e}")
+                if not self.quiet:
+                    self.console.print(f"[System] 工具调用解析异常: {e}")
         return "OK"
 
     def clear_history(self):

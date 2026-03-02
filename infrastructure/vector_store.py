@@ -14,9 +14,10 @@ class FaissVectorStore(IVectorStore):
     基于 FAISS 和 Sentence-Transformers 的工业级本地向量存储。
     使用 CPU 索引，处理万级文档极快。
     """
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2", local_files_only: bool = False):
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2", local_files_only: bool = False, verbose: bool = False):
         # 加载轻量级语义向量嵌入模型
-        print(f"🧠 正在加载 Embeddings 模型: {model_name}...")
+        if verbose:
+            print(f"🧠 正在加载 Embeddings 模型: {model_name}...")
         self.model = SentenceTransformer(model_name, local_files_only=local_files_only)
         self.dimension = self.model.get_sentence_embedding_dimension()
         # 使用余弦相似度（先归一化，再用内积）
