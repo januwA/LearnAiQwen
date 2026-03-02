@@ -33,16 +33,16 @@ def _resolve_embedding_model_path(requested_path: str) -> str:
 
     cached = _find_cached_embedding_snapshot()
     if cached is not None:
-        print(f"🔎 [System] 使用本地 HF 缓存 Embeddings 模型: {cached}")
+        print(f"[System] 使用本地 HF 缓存 Embeddings 模型: {cached}")
         return str(cached)
 
-    print("⬇️ [System] 未找到本地 Embeddings 模型，正在自动下载...")
+    print("[System] 未找到本地 Embeddings 模型，正在自动下载...")
     local_path.parent.mkdir(parents=True, exist_ok=True)
     downloaded = snapshot_download(
         repo_id=EMBEDDING_REPO_ID,
         local_dir=str(local_path),
     )
-    print(f"✅ [System] Embeddings 模型已下载到: {downloaded}")
+    print(f"[System] Embeddings 模型已下载到: {downloaded}")
     return str(Path(downloaded).resolve())
 
 def main():
@@ -104,27 +104,51 @@ def main():
         collect_feedback=(args.task is None),
     )
 
-    # 注册扩展后的全能工具集
-    from infrastructure.tools import WebSearchTool, DateTimeTool, ListCurrentDirTool, FileAnalysisTool, PlanTool, GitStatusTool
+    from infrastructure.tools import (
+        WebSearchTool, 
+        DateTimeTool, 
+        ListCurrentDirTool, 
+        FileAnalysisTool, 
+        PlanTool, 
+        GitStatusTool,
+        FileEditTool,
+        SystemContextTool,
+        PythonReplTool,
+        ImageAnalysisTool
+    )
     app.register_tool(WebSearchTool()) # 增加联网搜索
     app.register_tool(DateTimeTool())
     app.register_tool(ListCurrentDirTool())
     app.register_tool(FileAnalysisTool())
     app.register_tool(GitStatusTool())
     app.register_tool(PlanTool(storage))
+    app.register_tool(FileEditTool())
+    app.register_tool(SystemContextTool())
+    app.register_tool(PythonReplTool())
+    app.register_tool(ImageAnalysisTool())
 
     if args.task:
         app.run(args.task)
         sys.exit(0)
 
-    print("\n💡 输入 'exit' 退出，输入 'clear' 清空历史\n")
+    print("\n[System] 助手已就绪。输入 '/help' 查看指令，输入内容开始对话。\n")
     while True:
-        user_input = input("👤 You: ").strip()
-        if user_input.lower() in ['exit', 'quit']: break
-        if user_input.lower() == 'clear':
-            app.clear_history()
-            continue
-        if user_input: app.run(user_input)
+        try:
+            user_input = input("👤 You: ").strip()
+            if not user_input: continue
+            
+            # 优先处理以 / 开头的系统命令
+            if app.handle_command(user_input):
+                continue
+                
+            # 普通对话
+            app.run(user_input)
+            
+        except KeyboardInterrupt:
+            print("\n[System] 正在退出...")
+            break
+        except Exception as e:
+            print(f"\n[Error] 运行时异常: {e}")
 
 if __name__ == "__main__":
     main()

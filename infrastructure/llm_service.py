@@ -19,12 +19,16 @@ class QwenService(ILLMService):
         self.model.generation_config.pad_token_id = self.tokenizer.pad_token_id
         self.model.eval()
 
+    def get_token_count(self, text: str) -> int:
+        return len(self.tokenizer.encode(text))
+
     def generate_response(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None, max_new_tokens: int = 512) -> str:
         prompt_text = self.tokenizer.apply_chat_template(messages, tools=tools, add_generation_prompt=True, tokenize=False)
         inputs = self.tokenizer(prompt_text, add_special_tokens=False, return_tensors="pt").to(self.model.device)
+        input_ids_len = inputs.input_ids.shape[1]
         with torch.no_grad():
             output = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=True, temperature=0.7)
-        return self.tokenizer.decode(output[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+        return self.tokenizer.decode(output[0][input_ids_len:], skip_special_tokens=True)
 
     def generate_stream(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None, max_new_tokens: int = 512) -> Generator[str, None, None]:
         prompt_text = self.tokenizer.apply_chat_template(messages, tools=tools, add_generation_prompt=True, tokenize=False)

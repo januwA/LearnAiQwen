@@ -22,6 +22,11 @@ class ILLMService(ABC):
     def generate_stream(self, messages: List[Dict[str, str]], tools: List[Dict[str, Any]] = None, max_new_tokens: int = 512) -> Generator[str, None, None]:
         pass
 
+    @abstractmethod
+    def get_token_count(self, text: str) -> int:
+        """计算文本的 Token 数量"""
+        pass
+
 class IVectorStore(ABC):
     @abstractmethod
     def add_documents(self, documents: List[Dict[str, Any] | str]):

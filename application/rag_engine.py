@@ -61,19 +61,36 @@ class RagEngine:
         self.vector_store.add_documents(docs)
 
     def get_related_context(self, query: str) -> str:
-        results = self.vector_store.query(query, top_k=3)
+        results = self.vector_store.query(query, top_k=5) # 增加 top_k 提高召回
         filtered = [r for r in results if float(r.get("score", 0.0)) >= self.min_score]
+        
         if not filtered:
-            return "\n[通知] RAG 扫描完成：未发现与此请求直接相关的本地代码片段。请基于常识或已分析的内容回答。"
+            # 尝试关键词硬匹配兜底
+            keywords = [k for k in query.split() if len(k) > 2]
+            hard_matches = []
+            if keywords:
+                for doc in self.vector_store.documents:
+                    text = str(doc.get("text", "")).lower()
+                    if any(k.lower() in text for k in keywords):
+                        hard_matches.append(doc)
+                        if len(hard_matches) >= 3: break
+            
+            if hard_matches:
+                filtered = hard_matches
+                prefix = "\n⚠️ [RAG 兜底] 语义检索未命中，已切换至关键词硬匹配模式：\n"
+            else:
+                return "\n[通知] RAG 扫描完成：未发现与此请求直接相关的本地代码片段。请基于常识或已分析的内容回答。"
+        else:
+            prefix = "\n--- 📚 RAG 检索到的参考代码 (语义+关键词混合) ---\n"
 
-        context = "\n--- 📚 RAG 检索到的参考代码 (标注来源) ---\n"
+        context = prefix
         for i, doc in enumerate(filtered, start=1):
             score = float(doc.get("score", 0.0))
             path = doc.get("path", "<unknown>")
             chunk_id = doc.get("chunk_id", "?")
             text = str(doc.get("text", "")).strip()
             context += (
-                f"\n[参考 {i}] 路径: {path} | 分块: {chunk_id} | 相似度: {score:.3f}\n"
+                f"\n[参考 {i}] 路径: {path} | 相似度: {score:.3f}\n"
                 f"{text}\n"
             )
         context += "\n----------------------------------------"

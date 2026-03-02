@@ -95,24 +95,69 @@ class FileAnalysisTool(ITool):
     def execute(self, action: str, path: str, **kwargs) -> str:
         root = os.path.abspath(".")
         abs_path = os.path.abspath(path)
-        if os.path.commonpath([root, abs_path]) != root:
-            return "❌ 仅允许读取当前项目目录内文件。"
-        if os.path.isdir(abs_path):
-            if action == "get_info":
-                items = os.listdir(abs_path)
-                files = sum(1 for x in items if os.path.isfile(os.path.join(abs_path, x)))
-                dirs = sum(1 for x in items if os.path.isdir(os.path.join(abs_path, x)))
-                return f"目录: {abs_path}\n子目录数: {dirs}\n文件数: {files}\n总条目: {len(items)}"
-            return f"❌ '{path}' 是目录。请提供具体文件名。"
+        # 允许读取系统 Pictures 目录或其他外部目录（如果是绝对路径且用户提供）
+        if not os.path.exists(abs_path):
+            return f"❌ 文件不存在: {path}"
+            
+        is_image = abs_path.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".gif"))
+        
         try:
             stat = os.stat(abs_path)
+            if action == "get_info":
+                info = f"文件: {abs_path}\n大小: {stat.st_size} bytes"
+                if not is_image:
+                    try:
+                        with open(abs_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            lines = len(f.read().splitlines())
+                            info += f"\n行数: {lines}"
+                    except: pass
+                return info
+            
+            if is_image:
+                return f"❌ '{path}' 是图像文件，请使用 image_analysis 工具。"
+
             with open(abs_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
-            if action == "get_info":
-                return f"文件: {abs_path}\n大小: {stat.st_size} bytes\n行数: {len(content.splitlines())}"
             return f"--- 文件内容 ({abs_path}) ---\n{content[:3000]}"
         except Exception as e:
             return f"失败: {str(e)}"
+
+class ImageAnalysisTool(ITool):
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "image_analysis",
+                "description": "获取图像的基本信息（尺寸、格式、模式等元数据）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "图片路径"}
+                    },
+                    "required": ["path"]
+                }
+            }
+        }
+
+    def execute(self, path: str) -> str:
+        from PIL import Image
+        abs_path = os.path.abspath(path)
+        if not os.path.exists(abs_path):
+            return f"❌ 图片不存在: {path}"
+        try:
+            with Image.open(abs_path) as img:
+                info = [
+                    f"格式: {img.format}",
+                    f"尺寸: {img.width}x{img.height}",
+                    f"模式: {img.mode}",
+                    f"路径: {abs_path}"
+                ]
+                if hasattr(img, 'info'):
+                    info.append(f"元数据: {json.dumps(img.info, ensure_ascii=False)[:200]}...")
+                return "🖼️ 图像分析结果:\n" + "\n".join(info)
+        except Exception as e:
+            return f"❌ 图像读取失败: {str(e)}"
 
 class GitStatusTool(ITool):
     @property
@@ -143,6 +188,114 @@ class GitStatusTool(ITool):
             return output if output else "工作区干净，无变更。"
         except Exception as e:
             return f"❌ git 状态获取失败: {e}"
+
+class FileEditTool(ITool):
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "file_edit",
+                "description": "对文件进行原子级修改（替换或追加内容）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "文件路径"},
+                        "action": {"type": "string", "enum": ["replace", "append"], "description": "操作类型"},
+                        "old_content": {"type": "string", "description": "要替换的旧内容（仅 replace 时需要）"},
+                        "new_content": {"type": "string", "description": "新内容"}
+                    },
+                    "required": ["path", "action", "new_content"]
+                }
+            }
+        }
+
+    def execute(self, path: str, action: str, new_content: str, old_content: str = None) -> str:
+        abs_path = os.path.abspath(path)
+        if not os.path.exists(abs_path) and action == "replace":
+            return f"❌ 文件不存在: {path}"
+        
+        try:
+            if action == "replace":
+                if old_content is None: return "❌ replace 操作需要 old_content。"
+                with open(abs_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                if old_content not in content:
+                    return f"❌ 在文件中未找到指定的 old_content，请核对内容后重试。"
+                new_full_content = content.replace(old_content, new_content, 1)
+                with open(abs_path, 'w', encoding='utf-8') as f:
+                    f.write(new_full_content)
+                return f"✅ 已成功替换文件 '{path}' 中的内容。"
+            
+            elif action == "append":
+                with open(abs_path, 'a', encoding='utf-8') as f:
+                    f.write("\n" + new_content)
+                return f"✅ 已成功追加内容到文件 '{path}'。"
+        except Exception as e:
+            return f"❌ 修改文件失败: {str(e)}"
+
+class SystemContextTool(ITool):
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "get_system_context",
+                "description": "获取系统运行环境信息（OS, CPU, 内存, GPU 等）。",
+                "parameters": {"type": "object", "properties": {}, "required": []}
+            }
+        }
+
+    def execute(self, **kwargs) -> str:
+        import platform
+        import psutil
+        import torch
+        
+        mem = psutil.virtual_memory()
+        cpu_count = psutil.cpu_count(logical=True)
+        gpu_info = "N/A"
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            gpu_info = f"{gpu_name} ({gpu_mem:.1f}GB)"
+            
+        info = [
+            f"操作系统: {platform.system()} {platform.release()}",
+            f"CPU 核心数: {cpu_count}",
+            f"内存总量: {mem.total / (1024**3):.1f}GB (可用: {mem.available / (1024**3):.1f}GB)",
+            f"GPU 信息: {gpu_info}",
+            f"Python 版本: {platform.python_version()}"
+        ]
+        return "\n".join(info)
+
+class PythonReplTool(ITool):
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "python_repl",
+                "description": "运行 Python 代码并获取输出结果，适用于复杂计算和数据分析。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "要运行的 Python 代码"}
+                    },
+                    "required": ["code"]
+                }
+            }
+        }
+
+    def execute(self, code: str) -> str:
+        # 这里为了演示简单直接调用，实际应与 ChatApp 内部复用逻辑
+        import sys
+        import subprocess
+        cmd = [sys.executable, "-c", code]
+        try:
+            completed = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            return f"STDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        except Exception as e:
+            return f"执行失败: {str(e)}"
 
 class PlanTool(ITool):
     def __init__(self, storage: StorageService):
