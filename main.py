@@ -114,7 +114,8 @@ def main():
         FileEditTool,
         SystemContextTool,
         PythonReplTool,
-        ImageAnalysisTool
+        ImageAnalysisTool,
+        RagSearchTool
     )
     app.register_tool(WebSearchTool()) # 增加联网搜索
     app.register_tool(DateTimeTool())
@@ -126,6 +127,7 @@ def main():
     app.register_tool(SystemContextTool())
     app.register_tool(PythonReplTool())
     app.register_tool(ImageAnalysisTool())
+    app.register_tool(RagSearchTool(rag_engine))
 
     if args.task:
         app.run(args.task)

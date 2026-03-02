@@ -204,74 +204,38 @@ class ChatApp:
         self.tools[tool.metadata["function"]["name"]] = tool
 
     def run(self, prompt: str, stream: bool = True):
-        strategy = {"use_rag": False, "use_tools": False}
-        with self.console.status("[bold magenta][Logic] 正在进行意图识别...", spinner="arc"):
-            strategy = self._decide_strategy(prompt)
+        # 1. 自动注入基础环境上下文（Gemini CLI 风格：感知当前状态）
+        with self.console.status("[bold blue][System] 正在同步环境状态...", spinner="earth"):
+            try:
+                # 尝试获取 git 状态和当前目录摘要作为背景
+                cwd_summary = self.tools["list_current_dir"].execute() if "list_current_dir" in self.tools else "Unknown"
+                git_summary = self.tools["git_status"].execute() if "git_status" in self.tools else "Not a git repo"
+                
+                context_msg = (
+                    f"【当前环境状态】\n"
+                    f"工作目录摘要:\n{cwd_summary[:500]}...\n"
+                    f"Git 状态: {git_summary[:200]}\n"
+                    "如果你需要更详细的文件内容或进行深入分析，请调用相关工具（如 rag_search 或 file_analysis）。"
+                )
+                # 这种系统提示不存入持久化数据库，仅作为当前轮次的上下文
+                self.history.append({"role": "system", "content": context_msg})
+            except:
+                pass
+
+        # 2. 窗口管理（保持最近上下文）
+        if len(self.history) > 12:
+            self.history = [self.history[0]] + self.history[-8:]
+            self.console.print("[dim][System] 上下文窗口已自动裁减...[/]")
+
+        # 3. 记录用户输入
+        self.history.append({"role": "user", "content": prompt})
+        self.storage.save_message("user", prompt)
         
-        self.console.print(
-            f"[bold dim][Router] 策略: use_rag={strategy['use_rag']}, use_tools={strategy['use_tools']}[/]"
-        )
+        # 4. 执行核心推理（统一 ReAct 循环）
+        # 模型现在根据 prompt 和环境上下文，自主决定是否调用 rag_search, file_analysis 等
+        used_tools, last_answer = self._process_iteration(stream, allow_tools=True)
 
-        # 2. 知识库查询与相关性检查 (RAG Pipeline)
-        rag_context = ""
-        if strategy["use_rag"] and self.rag_engine:
-            with self.console.status("[bold green][RAG] 正在检索并验证本地知识相关性...", spinner="dots"):
-                rag_context = self.rag_engine.get_related_context(prompt)
-            if "参考" in rag_context:
-                self.console.print(Panel(rag_context, title="[RAG] 相关上下文片段", border_style="blue"))
-            else:
-                self.console.print("[System] RAG: 未发现高分相关结果，将进入基础生成路径。")
-
-        # 3. 窗口管理
-        if len(self.history) > 10:
-            self.history = [self.history[0]] + self.history[-6:]
-            self.console.print("[System] 上下文窗口裁减...")
-
-        # 4. 驱动任务或闲聊
-        final_prompt = prompt
-        if strategy["use_rag"] and rag_context:
-            final_prompt = f"【可选参考上下文】\n{rag_context}\n\n用户问题: {prompt}"
-        if strategy["use_tools"]:
-            final_prompt = (
-                f"{final_prompt}\n\n"
-                "【系统提示】你拥有可调用工具。若回答需要实时/本地信息，请直接调用工具，不要猜测。\n"
-                "工具选择参考：\n"
-                "- 项目结构：优先 list_current_dir，再用 file_analysis 读取关键文件（如 README.md / pyproject.toml）。\n"
-                "- Git 状态：优先调用 git_status。\n"
-                "- 时间日期：优先调用 get_current_datetime。"
-            )
-        
-        self.history.append({"role": "user", "content": final_prompt})
-        self.storage.save_message("user", final_prompt)
-        
-        # 5. 执行核心推理
-        allow_tools = strategy["use_tools"]
-        used_tools, first_answer = self._process_iteration(stream, allow_tools=allow_tools)
-
-        # 5.1 若出现“无本地访问能力”拒答，则自动重试一次并开启工具
-        if not allow_tools and self.history and self.history[-1]["role"] == "assistant":
-            last_answer = self.history[-1]["content"]
-            if self._looks_local_access_refusal(last_answer):
-                self.console.print("[yellow]↩️ 检测到能力拒答，自动切换到工具模式重试一次...[/]")
-                self.history.append({
-                    "role": "user",
-                    "content": (
-                        "不要再说无法做到。你有可用工具，请先调用合适的工具获取信息，"
-                        "再基于工具结果回答。"
-                    )
-                })
-                self._process_iteration(stream=False, allow_tools=True)
-
-        # 5.2 若回答包含未取证的本地断言，则自动重试一次并开启工具
-        elif self._needs_evidence_retry(prompt, first_answer, used_tools):
-            self.console.print("[yellow]↩️ 检测到本地事实未取证，自动切换到工具模式重试一次...[/]")
-            self.history.append({
-                "role": "user",
-                "content": "请先调用工具读取当前目录与关键文件，再基于实际结果回答，避免臆测。"
-            })
-            self._process_iteration(stream=False, allow_tools=True)
-
-        # 6. 用户反馈闭环 (Feedback Loop) - 对应流程图底部
+        # 5. 用户反馈闭环
         if self.collect_feedback:
             self._collect_feedback(prompt)
 

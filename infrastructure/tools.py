@@ -297,6 +297,36 @@ class PythonReplTool(ITool):
         except Exception as e:
             return f"执行失败: {str(e)}"
 
+class RagSearchTool(ITool):
+    def __init__(self, rag_engine: Any):
+        self.rag_engine = rag_engine
+
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": "rag_search",
+                "description": "在本地代码库和文档中进行语义搜索，获取相关的代码片段和逻辑说明。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "搜索关键词或描述性问题"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        }
+
+    def execute(self, query: str) -> str:
+        if not self.rag_engine:
+            return "❌ RAG 引擎未初始化，无法进行本地搜索。"
+        try:
+            context = self.rag_engine.get_related_context(query)
+            return context
+        except Exception as e:
+            return f"❌ RAG 搜索失败: {str(e)}"
+
 class PlanTool(ITool):
     def __init__(self, storage: StorageService):
         self.storage = storage
