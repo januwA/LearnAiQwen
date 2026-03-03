@@ -1,5 +1,6 @@
 [project.scripts]
 ai-qwen = "main:main"
+ai-qwen-openai-api = "openai_compatible_api:main"
 
 [project]
 name = "ai-qwen"
@@ -22,6 +23,8 @@ dependencies = [
     "questionary>=2.1.1",
     "psutil>=7.2.2",
     "pillow>=12.0.0",
+    "fastapi>=0.116.1",
+    "uvicorn>=0.35.0",
 ]
 
 [dependency-groups]
