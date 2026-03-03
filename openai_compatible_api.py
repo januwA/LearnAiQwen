@@ -1,6 +1,7 @@
 import argparse
 import gzip
 import json
+import re
 import time
 import uuid
 import zlib
@@ -50,6 +51,28 @@ class ResponsesRequest(BaseModel):
     tools: Optional[List[Dict[str, Any]]] = None
 
     model_config = ConfigDict(extra="allow")
+
+
+def _extract_tool_calls(text: str) -> List[Dict[str, Any]]:
+    calls: List[Dict[str, Any]] = []
+    if not text:
+        return calls
+
+    blocks = re.findall(r"```json\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+    blocks += re.findall(r"<tool_call>\s*(.*?)\s*</tool_call>", text, re.DOTALL | re.IGNORECASE)
+
+    for block in blocks:
+        try:
+            obj = json.loads(block.strip())
+            if isinstance(obj, dict) and obj.get("name"):
+                calls.append({"name": str(obj["name"]), "arguments": obj.get("arguments", {})})
+            elif isinstance(obj, list):
+                for item in obj:
+                    if isinstance(item, dict) and item.get("name"):
+                        calls.append({"name": str(item["name"]), "arguments": item.get("arguments", {})})
+        except Exception:
+            continue
+    return calls
 
 
 def _build_response(
@@ -120,6 +143,22 @@ def _responses_input_to_messages(raw_input: Any) -> List[Dict[str, str]]:
         messages: List[Dict[str, str]] = []
         for item in raw_input:
             if isinstance(item, dict):
+                item_type = str(item.get("type", ""))
+                if item_type == "function_call_output":
+                    call_id = str(item.get("call_id", "tool"))
+                    output = item.get("output", "")
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "name": call_id,
+                            "content": str(output),
+                        }
+                    )
+                    continue
+                if item_type == "function_call":
+                    # Assistant-side planning item; no need to feed back as user text.
+                    continue
+
                 role = str(item.get("role", "user"))
                 content = item.get("content", "")
                 if isinstance(content, list):
@@ -129,6 +168,8 @@ def _responses_input_to_messages(raw_input: Any) -> List[Dict[str, str]]:
                         if isinstance(c, dict):
                             if c.get("type") in {"input_text", "output_text", "text"}:
                                 text_parts.append(str(c.get("text", "")))
+                            elif c.get("type") == "input_image":
+                                text_parts.append("[image]")
                             elif "content" in c:
                                 text_parts.append(str(c.get("content", "")))
                     content = "\n".join(p for p in text_parts if p)
@@ -137,6 +178,7 @@ def _responses_input_to_messages(raw_input: Any) -> List[Dict[str, str]]:
             return messages
 
     return [{"role": "user", "content": str(raw_input)}]
+
 
 
 def _build_responses_json(
@@ -170,6 +212,42 @@ def _build_responses_json(
             }
         ],
         "output_text": content,
+        "usage": {
+            "input_tokens": prompt_tokens,
+            "output_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
+
+
+def _build_responses_tool_json(
+    *,
+    model: str,
+    tool_calls: List[Dict[str, Any]],
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> Dict[str, Any]:
+    response_id = f"resp_{uuid.uuid4().hex[:24]}"
+    output = []
+    for call in tool_calls:
+        output.append(
+            {
+                "id": f"fc_{uuid.uuid4().hex[:24]}",
+                "type": "function_call",
+                "status": "completed",
+                "call_id": f"call_{uuid.uuid4().hex[:24]}",
+                "name": call["name"],
+                "arguments": json.dumps(call.get("arguments", {}), ensure_ascii=False),
+            }
+        )
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": model,
+        "output": output,
+        "output_text": "",
         "usage": {
             "input_tokens": prompt_tokens,
             "output_tokens": completion_tokens,
@@ -283,6 +361,55 @@ def _stream_responses_chunks(model: str, stream_gen: Generator[str, None, None])
             ],
             "output_text": final_text,
         },
+    }
+    yield f"event: response.completed\ndata: {json.dumps(completed_evt, ensure_ascii=False)}\n\n"
+
+
+def _stream_responses_tool_chunks(model: str, tool_calls: List[Dict[str, Any]]):
+    response_id = f"resp_{uuid.uuid4().hex[:24]}"
+    created_at = int(time.time())
+    base_response = {
+        "id": response_id,
+        "object": "response",
+        "created_at": created_at,
+        "model": model,
+    }
+
+    created_evt = {"type": "response.created", "response": {**base_response, "status": "in_progress"}}
+    yield f"event: response.created\ndata: {json.dumps(created_evt, ensure_ascii=False)}\n\n"
+
+    in_progress_evt = {"type": "response.in_progress", "response": {**base_response, "status": "in_progress"}}
+    yield f"event: response.in_progress\ndata: {json.dumps(in_progress_evt, ensure_ascii=False)}\n\n"
+
+    output_items = []
+    for idx, call in enumerate(tool_calls):
+        item = {
+            "id": f"fc_{uuid.uuid4().hex[:24]}",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": f"call_{uuid.uuid4().hex[:24]}",
+            "name": call["name"],
+            "arguments": json.dumps(call.get("arguments", {}), ensure_ascii=False),
+        }
+        output_items.append(item)
+        added_evt = {
+            "type": "response.output_item.added",
+            "response_id": response_id,
+            "output_index": idx,
+            "item": item,
+        }
+        yield f"event: response.output_item.added\ndata: {json.dumps(added_evt, ensure_ascii=False)}\n\n"
+        done_evt = {
+            "type": "response.output_item.done",
+            "response_id": response_id,
+            "output_index": idx,
+            "item": item,
+        }
+        yield f"event: response.output_item.done\ndata: {json.dumps(done_evt, ensure_ascii=False)}\n\n"
+
+    completed_evt = {
+        "type": "response.completed",
+        "response": {**base_response, "status": "completed", "output": output_items, "output_text": ""},
     }
     yield f"event: response.completed\ndata: {json.dumps(completed_evt, ensure_ascii=False)}\n\n"
 
@@ -418,11 +545,19 @@ def create_app(llm: QwenService, served_model: str) -> FastAPI:
         prompt_tokens = llm.get_token_count(str(messages))
 
         if req.stream:
-            stream_gen = llm.generate_stream(
+            content = llm.generate_response(
                 messages=messages,
-                tools=None,
+                tools=req.tools,
                 max_new_tokens=req.max_output_tokens,
             )
+            tool_calls = _extract_tool_calls(content)
+            if tool_calls:
+                return StreamingResponse(
+                    _stream_responses_tool_chunks(served_model, tool_calls),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+                )
+            stream_gen = (part for part in [content])
             return StreamingResponse(
                 _stream_responses_chunks(served_model, stream_gen),
                 media_type="text/event-stream",
@@ -431,10 +566,20 @@ def create_app(llm: QwenService, served_model: str) -> FastAPI:
 
         content = llm.generate_response(
             messages=messages,
-            tools=None,
+            tools=req.tools,
             max_new_tokens=req.max_output_tokens,
         )
+        tool_calls = _extract_tool_calls(content)
         completion_tokens = llm.get_token_count(content)
+        if tool_calls:
+            return JSONResponse(
+                _build_responses_tool_json(
+                    model=served_model,
+                    tool_calls=tool_calls,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                )
+            )
         return JSONResponse(
             _build_responses_json(
                 model=served_model,
