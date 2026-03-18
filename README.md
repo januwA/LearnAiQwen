@@ -53,3 +53,10 @@ resp = client.chat.completions.create(
 print(resp.choices[0].message.content)
 PY
 ```
+
+## 使用 codex cli
+
+```sh
+$env:OPENAI_BASE_URL="http://127.0.0.1:8000/v1"; $env:OPENAI_API_KEY="dummy"; codex exec --dangerously-bypass-approvals-and-sandbox -c mcp_servers.context7.enabled=false -m qwen-local "1+1等于多少"
+$env:OPENAI_BASE_URL="http://127.0.0.1:8000/v1"; $env:OPENAI_API_KEY="dummy"; codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.context7.enabled=false -m qwen-local
+```
