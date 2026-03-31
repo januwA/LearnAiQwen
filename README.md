@@ -60,3 +60,25 @@ PY
 $env:OPENAI_BASE_URL="http://127.0.0.1:8000/v1"; $env:OPENAI_API_KEY="dummy"; codex exec --dangerously-bypass-approvals-and-sandbox -c mcp_servers.context7.enabled=false -m qwen-local "1+1等于多少"
 $env:OPENAI_BASE_URL="http://127.0.0.1:8000/v1"; $env:OPENAI_API_KEY="dummy"; codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.context7.enabled=false -m qwen-local
 ```
+
+## 翻译助手 (Tray App)
+
+项目集成了一个基于系统托盘的翻译助手，它调用本地的 OpenAI-compatible API 进行翻译。
+
+### 运行方式
+
+1. **先启动 API 服务**（后台运行模型）：
+   ```shell
+   uv run python openai_compatible_api.py --model-path ~\.ai_qwen\models\qwen2.5-3b
+   ```
+
+2. **启动翻译助手**：
+   ```shell
+   uv run python -m application.translator_tray
+   ```
+
+### 功能特点
+- **系统托盘**：最小化到托盘，不占任务栏。
+- **快捷键**：在输入框按 `Ctrl + Enter` 触发翻译。
+- **自动检测**：自动识别中英文并互译。
+- **本地化**：完全运行在本地，无需联网。
