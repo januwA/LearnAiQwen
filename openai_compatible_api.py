@@ -489,6 +489,11 @@ def create_app(llm: QwenService, served_model: str) -> FastAPI:
             ],
         }
 
+    @app.get("/v1/gpu/status")
+    def gpu_status():
+        """返回当前 GPU 显存使用详情"""
+        return llm.get_gpu_memory_info()
+
     @app.post("/v1/chat/completions")
     def chat_completions(req: ChatCompletionRequest):
         if req.model != served_model:
@@ -505,6 +510,8 @@ def create_app(llm: QwenService, served_model: str) -> FastAPI:
                 messages=messages,
                 tools=req.tools,
                 max_new_tokens=req.max_tokens,
+                temperature=req.temperature,
+                do_sample=req.temperature > 0,
             )
             return StreamingResponse(
                 _stream_chunks(served_model, stream_gen),
@@ -516,6 +523,8 @@ def create_app(llm: QwenService, served_model: str) -> FastAPI:
             messages=messages,
             tools=req.tools,
             max_new_tokens=req.max_tokens,
+            temperature=req.temperature,
+            do_sample=req.temperature > 0,
         )
         completion_tokens = llm.get_token_count(content)
         return JSONResponse(
