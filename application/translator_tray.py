@@ -26,6 +26,8 @@ RETRY_DELAY = 1.0
 WINDOW = None
 STATUS_VAR = None
 MODEL_VAR = None
+SOURCE_LANG_VAR = None
+TARGET_LANG_VAR = None
 INPUT_TEXT = None
 OUTPUT_TEXT = None
 TRANSLATE_BUTTON = None
@@ -34,6 +36,8 @@ MODEL_BOX = None
 EVENT_QUEUE = queue.Queue()
 TRAY = None
 
+# 语言列表
+LANG_OPTIONS = ["自动检测", "自动切换(中英)", "中文", "English", "日本語", "Français", "Deutsch", "Español", "한국어", "Русский"]
 
 def translate_text(text):
     text = text.strip()
@@ -41,29 +45,43 @@ def translate_text(text):
         return ""
 
     model_name = MODEL_VAR.get() if MODEL_VAR is not None else DEFAULT_MODEL
+    source_lang_ui = SOURCE_LANG_VAR.get() if SOURCE_LANG_VAR is not None else "自动检测"
+    target_lang_ui = TARGET_LANG_VAR.get() if TARGET_LANG_VAR is not None else "自动切换(中英)"
+
+    # --- 核心逻辑判定 ---
+    target_lang_actual = target_lang_ui
+
+    # 情况 A: 目标语言选的是“自动切换(中英)”
+    if target_lang_actual == "自动切换(中英)":
+        zh_count = len(re.findall(r'[\u4e00-\u9fff]', text))
+        en_count = len(re.findall(r'[a-zA-Z]', text))
+        target_lang_actual = "English" if zh_count > en_count else "中文"
     
-    zh_count = len(re.findall(r'[\u4e00-\u9fff]', text))
-    en_count = len(re.findall(r'[a-zA-Z]', text))
-    target_lang = "English" if zh_count > en_count else "Chinese"
+    # 构建指令
+    if source_lang_ui == "自动检测":
+        prompt = f"把下面这段话翻译成{target_lang_actual}，只输出译文，不要解释：\n\n{text}"
+    else:
+        prompt = f"请把下面这段话从{source_lang_ui}翻译成{target_lang_actual}，只返回翻译结果，不要带解释：\n\n{text}"
 
     # OpenAI 兼容消息格式
     payload = {
         "model": model_name,
         "messages": [
-            {"role": "system", "content": f"You are a translation bot. Translate EVERYTHING to {target_lang}. No side comments."},
-            {"role": "user", "content": f"Translate to {target_lang}:\n\"\"\"\n{text}\n\"\"\""},
+            {"role": "user", "content": prompt},
         ],
         "stream": False,
-        "temperature": 0.1,
+        "temperature": 0.3,
         "max_tokens": 1024,
     }
+    
+    # 调试日志
+    print(payload)
 
     last_error = None
     for attempt in range(RETRY_COUNT + 1):
         try:
             response = requests.post(CHAT_ENDPOINT, json=payload, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
-            # OpenAI 兼容响应格式解析
             data = response.json()
             result = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             return result
@@ -93,7 +111,6 @@ def fetch_models():
     try:
         response = requests.get(MODELS_ENDPOINT, timeout=3)
         response.raise_for_status()
-        # OpenAI /v1/models 格式
         data = response.json()
         models = [item.get("id", "") for item in data.get("data", []) if item.get("id")]
     except Exception:
@@ -104,14 +121,11 @@ def fetch_models():
 def refresh_models():
     if MODEL_VAR is None:
         return
-
     set_status("正在获取 API 模型...")
-
     def worker():
         options = fetch_models()
         if not options:
             options = [DEFAULT_MODEL]
-
         def update_ui():
             if MODEL_BOX is None:
                 return
@@ -120,9 +134,7 @@ def refresh_models():
             if current not in options:
                 MODEL_VAR.set(options[0])
             set_status("模型已同步。")
-
         WINDOW.after(0, update_ui)
-
     threading.Thread(target=worker, daemon=True).start()
 
 
@@ -147,11 +159,8 @@ def run_translation():
             else:
                 duration = time.time() - start_time
                 message = f"翻译完成，耗时 {duration:.2f}s"
-        except requests.exceptions.ConnectionError:
-            result = "错误: 无法连接到 AI Qwen API 服务。请确保已运行 `uv run ai-qwen-openai-api`"
-            message = "后端服务未启动"
         except Exception as exc:
-            result = f"翻译过程中出现未知错误: {exc}"
+            result = f"错误: {exc}"
             message = "翻译失败"
 
         def update_ui():
@@ -176,7 +185,6 @@ def speak_text(text):
     if not text.strip():
         set_status("没有可朗读的内容。")
         return
-
     def worker():
         try:
             pythoncom.CoInitialize()
@@ -186,11 +194,7 @@ def speak_text(text):
         except Exception as exc:
             WINDOW.after(0, lambda: set_status(f"朗读失败: {exc}"))
         finally:
-            try:
-                pythoncom.CoUninitialize()
-            except Exception:
-                pass
-
+            pythoncom.CoUninitialize()
     threading.Thread(target=worker, daemon=True).start()
 
 
@@ -218,24 +222,44 @@ def show_window():
 
 
 def build_window():
-    global WINDOW, STATUS_VAR, MODEL_VAR, INPUT_TEXT, OUTPUT_TEXT, TRANSLATE_BUTTON, COPY_BUTTON, MODEL_BOX
+    global WINDOW, STATUS_VAR, MODEL_VAR, SOURCE_LANG_VAR, TARGET_LANG_VAR, INPUT_TEXT, OUTPUT_TEXT, TRANSLATE_BUTTON, COPY_BUTTON, MODEL_BOX
     WINDOW = tk.Tk()
     WINDOW.title("AI Qwen 翻译助手")
     WINDOW.geometry("720x520")
     WINDOW.protocol("WM_DELETE_WINDOW", hide_window)
 
-    STATUS_VAR = tk.StringVar(value="就绪 (待连接 API)")
+    STATUS_VAR = tk.StringVar(value="就绪")
     MODEL_VAR = tk.StringVar(value=DEFAULT_MODEL)
+    SOURCE_LANG_VAR = tk.StringVar(value="自动检测")
+    TARGET_LANG_VAR = tk.StringVar(value="自动切换(中英)")
 
     frame = tk.Frame(WINDOW, padx=10, pady=10)
     frame.pack(fill="both", expand=True)
 
     top_row = tk.Frame(frame)
     top_row.pack(fill="x")
-    tk.Label(top_row, text="后端模型").pack(side="left")
-    MODEL_BOX = ttk.Combobox(top_row, textvariable=MODEL_VAR, width=32, state="readonly")
+    tk.Label(top_row, text="后端模型:").pack(side="left")
+    MODEL_BOX = ttk.Combobox(top_row, textvariable=MODEL_VAR, width=28, state="readonly")
     MODEL_BOX.pack(side="left", padx=6)
     tk.Button(top_row, text="同步模型", command=refresh_models).pack(side="left")
+
+    lang_row = tk.Frame(frame)
+    lang_row.pack(fill="x", pady=(10, 0))
+    tk.Label(lang_row, text="从").pack(side="left")
+    source_box = ttk.Combobox(lang_row, textvariable=SOURCE_LANG_VAR, values=LANG_OPTIONS[:1]+LANG_OPTIONS[2:], width=12, state="readonly")
+    source_box.pack(side="left", padx=6)
+    tk.Label(lang_row, text="翻译成").pack(side="left")
+    target_box = ttk.Combobox(lang_row, textvariable=TARGET_LANG_VAR, values=LANG_OPTIONS[1:], width=15, state="readonly")
+    target_box.pack(side="left", padx=6)
+    
+    def swap_languages():
+        s = SOURCE_LANG_VAR.get()
+        t = TARGET_LANG_VAR.get()
+        if s != "自动检测" and t != "自动切换(中英)":
+            SOURCE_LANG_VAR.set(t)
+            TARGET_LANG_VAR.set(s)
+
+    tk.Button(lang_row, text="⇅ 互换", command=swap_languages, padx=5).pack(side="left", padx=10)
 
     tk.Label(frame, text="输入 (Ctrl+Enter 翻译)").pack(anchor="w", pady=(8, 0))
     INPUT_TEXT = scrolledtext.ScrolledText(frame, height=10, wrap=tk.WORD)
@@ -284,29 +308,9 @@ class TrayThread(threading.Thread):
         except win32gui.error:
             pass
 
-        self.hwnd = win32gui.CreateWindow(
-            wc.lpszClassName,
-            "AIQwenTranslator",
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            wc.hInstance,
-            None,
-        )
-
+        self.hwnd = win32gui.CreateWindow(wc.lpszClassName, "AIQwenTranslator", 0, 0, 0, 0, 0, 0, 0, wc.hInstance, None)
         icon = win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
-        nid = (
-            self.hwnd,
-            0,
-            win32gui.NIF_ICON | win32gui.NIF_MESSAGE | win32gui.NIF_TIP,
-            win32con.WM_USER + 20,
-            icon,
-            "AI Qwen 翻译助手",
-        )
+        nid = (self.hwnd, 0, win32gui.NIF_ICON | win32gui.NIF_MESSAGE | win32gui.NIF_TIP, win32con.WM_USER + 20, icon, "AI Qwen 翻译助手")
         win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, nid)
         win32gui.PumpMessages()
 
@@ -327,15 +331,7 @@ class TrayThread(threading.Thread):
         win32gui.AppendMenu(menu, win32con.MF_STRING, 2, "完全退出")
         x, y = win32gui.GetCursorPos()
         win32gui.SetForegroundWindow(self.hwnd)
-        cmd = win32gui.TrackPopupMenu(
-            menu,
-            win32con.TPM_LEFTALIGN | win32con.TPM_RIGHTBUTTON | win32con.TPM_RETURNCMD,
-            x,
-            y,
-            0,
-            self.hwnd,
-            None,
-        )
+        cmd = win32gui.TrackPopupMenu(menu, win32con.TPM_LEFTALIGN | win32con.TPM_RIGHTBUTTON | win32con.TPM_RETURNCMD, x, y, 0, self.hwnd, None)
         if cmd == 1:
             self.event_queue.put("show")
         elif cmd == 2:
@@ -364,7 +360,6 @@ def process_events():
                     WINDOW.destroy()
     except queue.Empty:
         pass
-
     if WINDOW is not None:
         WINDOW.after(100, process_events)
 
